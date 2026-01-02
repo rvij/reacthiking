@@ -192,7 +192,7 @@ const App = () => {
   // CATEGORY LOGIC: Demanding scoring system based on physical exertion
   const demandingHikes = useMemo(() => {
     const priorityNames = [
-      'white mountain', 'everest', 'nepal', 'mount dana', 'shiva murugan', 
+      'white mountain', 'everest', 'base camp', 'nepal', 'mount dana', 'shiva murugan', 
       'ohlone wilderness', 'del valle', 'sunol peak', 'taylor ranch', 'mission peak'
     ];
     
@@ -429,7 +429,7 @@ const App = () => {
             <div className="flex overflow-x-auto gap-6 pb-4 no-scrollbar">
               {milestones.map((m) => (
                 <div key={m.id} className="min-w-[320px] bg-white rounded-3xl p-6 border border-gray-100 shadow-sm hover:shadow-xl transition-all group">
-                  <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase mb-4 inline-block group-hover:bg-emerald-600 group-hover:text-white transition-colors">
+                  <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase mb-4 inline-block group-hover:bg-emerald-600 group-hover:text-white transition-colors font-mono">
                     Hike #{m.id}
                   </span>
                   <h3 className="text-xl font-black mb-2 line-clamp-1">{m.location}</h3>
@@ -438,6 +438,7 @@ const App = () => {
                     <span>{m.date}</span>
                     <div className="flex gap-2">
                        {m.miles > 0 && <span className="text-emerald-600 font-black">{m.miles}mi</span>}
+                       {m.elevation > 0 && <span className="text-red-600 font-black">{m.elevation.toLocaleString()}ft</span>}
                     </div>
                   </div>
                 </div>
@@ -468,13 +469,13 @@ const App = () => {
                           {h.elevation > 0 && <span className="text-[9px] font-black bg-red-50 text-red-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.elevation.toLocaleString()} ft gain</span>}
                         </div>
                       </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-red-400 transition-colors ml-4">#{h.id}</span>
+                      <span className="text-[10px] font-black text-gray-300 group-hover:text-red-400 transition-colors ml-4 whitespace-nowrap">#{h.id}</span>
                     </div>
                   ))}
                   {demandingHikes.length > 3 && (
                     <button onClick={() => setShowAllDemanding(!showAllDemanding)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-red-600 transition-colors group">
                       {showAllDemanding ? 'Show Less' : `More Hikes (${demandingHikes.length - 3})`}
-                      {showAllDemanding ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      {showAllDemanding ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
                     </button>
                   )}
                 </div>
@@ -499,7 +500,7 @@ const App = () => {
                   {beautifulHikes.length > 3 && (
                     <button onClick={() => setShowAllBeautiful(!showAllBeautiful)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-blue-600 transition-colors group">
                       {showAllBeautiful ? 'Show Less' : `More Hikes (${beautifulHikes.length - 3})`}
-                      {showAllBeautiful ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      {showAllBeautiful ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
                     </button>
                   )}
                 </div>
@@ -568,7 +569,7 @@ const App = () => {
                   <Activity className="h-5 w-5 text-emerald-600" />
                   {searchTerm ? 'Search Results' : 'Adventure History'}
                 </h3>
-                <span className="text-xs font-bold text-gray-400 bg-white px-3 py-1 rounded-full border border-gray-100">
+                <span className="text-xs font-bold text-gray-400 bg-white px-3 py-1 rounded-full border border-gray-100 font-mono">
                   {filteredData.length} entries
                 </span>
               </div>
@@ -579,9 +580,12 @@ const App = () => {
                       <div className="flex justify-between items-start gap-4">
                         <div className="flex-grow">
                           <div className="flex items-center gap-3 mb-2">
-                            <span className="text-[10px] font-black bg-gray-900 text-white px-3 py-1 rounded-full group-hover:bg-emerald-600 transition-colors">#{hike.id}</span>
+                            <span className="text-[10px] font-black bg-gray-900 text-white px-3 py-1 rounded-full group-hover:bg-emerald-600 transition-colors font-mono">#{hike.id}</span>
                             <span className="text-xs font-bold text-gray-400">{hike.date}</span>
-                            {hike.miles > 0 && <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{hike.miles} miles</span>}
+                            <div className="flex gap-3">
+                              {hike.miles > 0 && <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{hike.miles} miles</span>}
+                              {hike.elevation > 0 && <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">{hike.elevation.toLocaleString()} ft gain</span>}
+                            </div>
                           </div>
                           <h4 className="text-2xl font-black mb-3 group-hover:text-emerald-700 transition-colors">{hike.location}</h4>
                           <p className="text-gray-600 text-sm md:text-base leading-relaxed">{hike.comments}</p>
@@ -603,7 +607,7 @@ const App = () => {
                   <div className="p-20 text-center text-gray-400 flex flex-col items-center gap-4">
                     <Info className="h-10 w-10 opacity-20" />
                     <p className="font-medium italic">No matches found for "{searchTerm}"</p>
-                    <button onClick={() => setSearchTerm('')} className="text-emerald-600 font-bold text-sm hover:underline">Clear search</button>
+                    <button onClick={() => setSearchTerm('')} className="text-emerald-600 font-bold text-sm hover:underline font-black">Clear search</button>
                   </div>
                 )}
               </div>
@@ -643,10 +647,10 @@ const App = () => {
                   {topLocations.map((loc, idx) => (
                     <div key={idx} className="flex items-center justify-between group">
                       <div className="flex items-center gap-4">
-                        <div className="h-10 w-10 rounded-xl bg-gray-50 text-gray-400 flex items-center justify-center text-sm font-black group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors">{idx + 1}</div>
+                        <div className="h-10 w-10 rounded-xl bg-gray-50 text-gray-400 flex items-center justify-center text-sm font-black group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors font-mono">{idx + 1}</div>
                         <span className="text-sm font-bold text-gray-700">{loc.name}</span>
                       </div>
-                      <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-[10px] font-black">{loc.count}</span>
+                      <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-[10px] font-black font-mono">{loc.count}</span>
                     </div>
                   ))}
                 </div>
@@ -661,7 +665,7 @@ const App = () => {
                 <div className="w-full h-2.5 bg-white/10 rounded-full mb-3">
                   <div className="h-full bg-emerald-500 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.5)] transition-all duration-1000" style={{ width: `${Math.min((data[0]?.id / 400) * 100, 100)}%` }}></div>
                 </div>
-                <div className="flex justify-between text-[10px] font-black text-emerald-400 tracking-widest">
+                <div className="flex justify-between text-[10px] font-black text-emerald-400 tracking-widest font-mono">
                   <span>CURRENT: {data[0]?.id || 0}</span>
                   <span>GOAL: 400</span>
                 </div>
