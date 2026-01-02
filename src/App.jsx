@@ -5,18 +5,51 @@ import {
 import { 
   Calendar, MapPin, Search, ChevronRight, Activity, TrendingUp, Info, 
   ExternalLink, ArrowUpRight, Filter, X, Hash, Trophy, Star, Target, Flag, RefreshCw, Link as LinkIcon, Settings,
-  Zap, Sparkles, ChevronDown, ChevronUp, Wind, Coffee, Route, Clock, Mountain
+  Zap, Sparkles, ChevronDown, ChevronUp, Wind, Coffee, Route, Clock, Mountain, LogOut, Lock
 } from 'lucide-react';
 
+// Firebase Imports
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  setPersistence,
+  browserLocalPersistence 
+} from 'firebase/auth';
+
 /**
- * GOOGLE SHEETS SETUP:
- * 1. File > Share > Publish to web.
- * 2. Select 'Link', choose your sheet, and set format to 'Comma-separated values (.csv)'.
- * 3. Copy that link and paste it into the Settings in the dashboard.
+ * FIREBASE CONFIGURATION
+ * Replace these values with your actual keys from the Firebase Console
  */
+const firebaseConfig = {
+  apiKey: "AIzaSyARpTn2oVboddJ32vLHqSaBSQGjZCVg2NA",
+  authDomain: "rvijgdrive-152618.firebaseapp.com",
+  projectId: "rvijgdrive-152618",
+  storageBucket: "rvijgdrive-152618.firebasestorage.app",
+  messagingSenderId: "366295091706",
+  appId: "1:366295091706:web:4695a1a43466d62cfcfc43",
+  measurementId: "G-92G67DLXZ8"
+};
+
+// Initialize Firebase services
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
+
+// Set Session Persistence so users stay logged in across refreshes
+setPersistence(auth, browserLocalPersistence);
+
 const DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRg1rSihcL1ivA8OZMcRuJ__LoU46zaIm8CHfUyZmdAI42mRl_3zijL1jpWYWsd7KjtCQCD2x8FMwIe/pub?gid=0&single=true&output=csv"; 
 
 const App = () => {
+  // --- Auth State ---
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // --- Data & UI State ---
   const [data, setData] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedYear, setSelectedYear] = useState('All');
@@ -26,22 +59,50 @@ const App = () => {
   const [sheetUrl, setSheetUrl] = useState(DEFAULT_SHEET_URL);
   const [showSettings, setShowSettings] = useState(false);
   
-  // State for expanded sections
+  // Toggle states for category lists
   const [showAllDemanding, setShowAllDemanding] = useState(false);
   const [showAllBeautiful, setShowAllBeautiful] = useState(false);
   const [showAllWindy, setShowAllWindy] = useState(false);
   const [showAllBreakfast, setShowAllBreakfast] = useState(false);
 
-  // Helper to extract numeric values robustly
+  // --- Authentication Handlers ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      console.error("Login failed", err);
+    }
+  };
+
+  const handleLogout = () => signOut(auth);
+
+  const isAuthorized = useMemo(() => {
+    if (!user) return false;
+    const email = user.email.toLowerCase();
+    // Authorized list
+    return (
+      email.endsWith('@gmail.com') || 
+      email === 'mv11015@husd.k12.ca.us' || 
+      email === 'rajeev.vij@gmail.com'
+    );
+  }, [user]);
+
+  // --- Data Parsing Logic ---
   const cleanNum = (val) => {
     if (val === undefined || val === null || val === '') return 0;
-    // Remove commas and extract the first sequence of digits and decimals
     const sanitized = val.toString().replace(/,/g, '').trim();
     const match = sanitized.match(/^-?\d*\.?\d+/);
     return match ? parseFloat(match[0]) : 0;
   };
 
-  // Robust CSV Parser
   const parseCSV = (csvText) => {
     const lines = [];
     let currentLine = [];
@@ -51,10 +112,8 @@ const App = () => {
     for (let i = 0; i < csvText.length; i++) {
       const char = csvText[i];
       const nextChar = csvText[i + 1];
-
       if (char === '"' && inQuotes && nextChar === '"') {
-        currentField += '"';
-        i++;
+        currentField += '"'; i++;
       } else if (char === '"') {
         inQuotes = !inQuotes;
       } else if (char === ',' && !inQuotes) {
@@ -63,27 +122,21 @@ const App = () => {
       } else if ((char === '\r' || char === '\n') && !inQuotes) {
         currentLine.push(currentField.trim());
         if (currentLine.length > 0) lines.push(currentLine);
-        currentLine = [];
-        currentField = "";
+        currentLine = []; currentField = "";
         if (char === '\r' && nextChar === '\n') i++;
       } else {
         currentField += char;
       }
     }
-    
     if (currentField || currentLine.length > 0) {
       currentLine.push(currentField.trim());
       lines.push(currentLine);
     }
 
     if (lines.length < 2) return [];
-
-    // Identify Column Indices from Header Row
     const header = lines[0].map(h => h.toLowerCase().trim());
     const milesIdx = header.findIndex(h => h.includes('mile'));
     const elevIdx = header.findIndex(h => h.includes('elevation') || h.includes('gain'));
-    
-    // Fallback logic if headers aren't explicitly named - use indices based on user description (last 2)
     const finalMilesIdx = milesIdx !== -1 ? milesIdx : lines[0].length - 2;
     const finalElevIdx = elevIdx !== -1 ? elevIdx : lines[0].length - 1;
 
@@ -91,8 +144,6 @@ const App = () => {
       .map(parts => {
         const rawHikeNum = parts[0];
         const id = rawHikeNum && rawHikeNum.trim() !== "" ? parseInt(rawHikeNum) : null;
-        
-        // Year Sanitizer
         let year = 'Unknown';
         const dateParts = parts[1]?.split('/');
         if (dateParts && dateParts.length === 3) {
@@ -101,7 +152,6 @@ const App = () => {
           if (rawYear.length > 4) rawYear = rawYear.slice(-4);
           if (rawYear.length === 4) year = rawYear;
         }
-        
         return {
           id: id,
           date: parts[1] || '',
@@ -118,16 +168,12 @@ const App = () => {
   };
 
   const fetchData = useCallback(async (url) => {
-    if (!url) {
-      setLoading(false);
-      return;
-    }
-    
+    if (!url || !isAuthorized) return;
     setIsRefreshing(true);
     setError(null);
     try {
       const response = await fetch(url);
-      if (!response.ok) throw new Error('Could not reach Google Sheets. Check link permissions.');
+      if (!response.ok) throw new Error('Could not reach Google Sheets.');
       const csvText = await response.text();
       const parsed = parseCSV(csvText);
       setData(parsed);
@@ -138,12 +184,13 @@ const App = () => {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [isAuthorized]);
 
   useEffect(() => {
-    fetchData(sheetUrl);
-  }, [sheetUrl, fetchData]);
+    if (isAuthorized) fetchData(sheetUrl);
+  }, [sheetUrl, fetchData, isAuthorized]);
 
+  // --- Memoized Derived Data ---
   const milestones = useMemo(() => {
     const targets = [350, 300, 250, 200, 150, 100, 50, 25, 1];
     return data.filter(h => targets.includes(h.id)).sort((a, b) => b.id - a.id);
@@ -164,7 +211,6 @@ const App = () => {
     const yearSet = new Set();
     let totalMiles = 0;
     let totalElevation = 0;
-
     data.forEach(hike => {
       const y = parseInt(hike.year);
       if (!isNaN(y)) {
@@ -174,58 +220,44 @@ const App = () => {
       totalMiles += (hike.miles || 0);
       totalElevation += (hike.elevation || 0);
     });
-
     const mostActive = [...yearStats].sort((a, b) => b.count - a.count)[0];
     const totalYears = yearSet.size || 1;
-
     return {
       hikeCount: data.length,
       since: startYear,
       activeYear: mostActive?.year || 'N/A',
       activeCount: mostActive?.count || 0,
-      averageHikesPerYear: (data.length / totalYears).toFixed(1),
+      averageHikesPerYear: (data.length / (totalYears || 1)).toFixed(1),
       totalMiles: totalMiles.toLocaleString(undefined, { maximumFractionDigits: 1 }),
       totalElevation: totalElevation.toLocaleString()
     };
   }, [data, yearStats]);
 
-  // CATEGORY LOGIC: Demanding scoring system based on physical exertion
   const demandingHikes = useMemo(() => {
-    const priorityNames = [
-      'white mountain', 'everest', 'base camp', 'nepal', 'mount dana', 'shiva murugan', 
-      'ohlone wilderness', 'del valle', 'sunol peak', 'taylor ranch', 'mission peak'
-    ];
-    
+    const priorityNames = ['white mountain', 'everest', 'nepal', 'mount dana', 'shiva murugan', 'ohlone wilderness', 'del valle', 'sunol peak', 'taylor ranch', 'mission peak'];
     return data.map(h => {
       const loc = h.location.toLowerCase();
       const comm = h.comments.toLowerCase();
-      
-      // Calculate direct physical score: 1 Mile is worth 500ft of gain for ranking purposes
       let score = (h.miles * 500) + (h.elevation);
-      
-      // Secondary check: keyword scoring for entries without column data or local legends
       if (priorityNames.some(name => loc.includes(name) || comm.includes(name))) score += 8000;
       if (comm.includes('strenuous') || comm.includes('tough') || comm.includes('challenging')) score += 1000;
-
       return { ...h, score };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 10);
+    }).sort((a, b) => b.score - a.score).slice(0, 15);
   }, [data]);
 
   const beautifulHikes = useMemo(() => {
     const keywords = ['beautiful', 'stunning', 'gorgeous', 'picturesque', 'sunrise', 'scenic', 'serene', 'view', 'lush', 'amazing'];
-    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 10);
+    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 15);
   }, [data]);
 
   const windyRainyHikes = useMemo(() => {
     const keywords = ['windy', 'rainy', 'rain', 'storm', 'wind', 'wet', 'soaked', 'chilly', 'cold', 'weather'];
-    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 10);
+    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 15);
   }, [data]);
 
   const breakfastHikes = useMemo(() => {
     const keywords = ['breakfast', 'pancakes', 'eggs', 'coffee', 'diner', 'eating', 'meal', 'food', 'brunch', 'bakery'];
-    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 10);
+    return data.filter(h => keywords.some(k => h.comments.toLowerCase().includes(k))).slice(0, 15);
   }, [data]);
 
   const filteredData = useMemo(() => {
@@ -234,98 +266,161 @@ const App = () => {
       const matchesYear = selectedYear === 'All' || hike.year === selectedYear;
       if (!matchesYear) return false;
       if (!s) return true;
-      return (
-        hike.location.toLowerCase().includes(s) ||
-        hike.comments.toLowerCase().includes(s) ||
-        hike.id.toString().includes(s) ||
-        hike.date.toLowerCase().includes(s)
-      );
+      return hike.location.toLowerCase().includes(s) || hike.comments.toLowerCase().includes(s) || hike.id.toString().includes(s) || hike.date.toLowerCase().includes(s);
     });
   }, [data, searchTerm, selectedYear]);
 
-  const topLocations = useMemo(() => {
-    const locations = {};
-    data.forEach(hike => {
-      const loc = hike.location.split(',')[0].trim().toUpperCase();
-      if (loc && loc !== 'UNKNOWN' && loc !== '') {
-        locations[loc] = (locations[loc] || 0) + 1;
-      }
-    });
-    return Object.entries(locations)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([name, count]) => ({ name, count }));
-  }, [data]);
-
   const years = ['All', ...new Set(data.map(h => h.year).filter(y => y && y !== 'Unknown'))].sort((a, b) => b - a);
 
-  if (loading && !data.length) {
+  // --- Sub-Components ---
+  const HikeListCard = ({ title, icon: Icon, hikes, colorClass, showAll, onToggle }) => (
+    <div className="bg-white p-6 rounded-[2rem] border border-gray-100 shadow-sm transition-all hover:shadow-md flex flex-col">
+      <div className="flex justify-between items-center mb-6">
+        <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2">
+          <Icon className={`h-4 w-4 ${colorClass}`} /> {title}
+        </h3>
+        {/* Keeping header icon for quick toggle, adding subtle label */}
+        <div className="flex items-center gap-1 group">
+           <button onClick={onToggle} className="text-gray-300 hover:text-emerald-600 transition-colors flex items-center gap-1">
+             {showAll ? <ChevronUp className="h-5 w-5" /> : <ChevronDown className="h-5 w-5" />}
+           </button>
+        </div>
+      </div>
+      <div className="space-y-4 flex-grow">
+        {(showAll ? hikes : hikes.slice(0, 4)).map((hike) => (
+          <div key={hike.id} className="flex items-center gap-3 group cursor-help">
+            <span className="text-[10px] font-black bg-gray-50 text-gray-400 w-8 h-8 flex items-center justify-center rounded-xl group-hover:bg-emerald-600 group-hover:text-white transition-all">
+              #{hike.id}
+            </span>
+            <div className="flex-grow overflow-hidden">
+              <div className="text-xs font-black truncate uppercase tracking-tighter group-hover:text-emerald-700">{hike.location}</div>
+              <div className="text-[9px] text-gray-400 font-bold font-mono">
+                {hike.date} • {hike.miles}mi {hike.elevation > 0 && `• ${hike.elevation.toLocaleString()}ft`}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      {/* Explicit Toggle Button at the bottom for better clarity */}
+      {hikes.length > 4 && (
+        <button 
+          onClick={onToggle}
+          className="mt-6 pt-4 border-t border-gray-50 text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:text-emerald-800 transition-colors flex items-center justify-center gap-2"
+        >
+          {showAll ? (
+            <>Show Less <ChevronUp className="h-3 w-3" /></>
+          ) : (
+            <>View All {hikes.length} Peaks <ChevronDown className="h-3 w-3" /></>
+          )}
+        </button>
+      )}
+    </div>
+  );
+
+  // --- Main View Logic ---
+  if (authLoading) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center bg-gray-50 p-6">
-        <RefreshCw className="mb-4 h-12 w-12 animate-spin text-emerald-600" />
-        <h2 className="text-xl font-bold text-gray-700">Connecting to Google Sheet...</h2>
+      <div className="h-screen flex items-center justify-center bg-gray-900">
+        <RefreshCw className="h-8 w-8 animate-spin text-emerald-500" />
       </div>
     );
   }
 
+  if (!user) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-gray-900 text-white p-6 overflow-hidden relative font-sans">
+        <div className="absolute inset-0 opacity-20 pointer-events-none">
+            <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-emerald-500 rounded-full blur-[120px]"></div>
+            <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500 rounded-full blur-[120px]"></div>
+        </div>
+        <div className="z-10 text-center max-w-md w-full">
+            <div className="bg-emerald-600 w-20 h-20 rounded-[2rem] flex items-center justify-center mx-auto mb-8 shadow-2xl rotate-3">
+                <Mountain className="text-white h-10 w-10" />
+            </div>
+            <h1 className="text-4xl font-black tracking-tighter uppercase mb-4">Challenger Dashboard</h1>
+            <p className="text-gray-400 mb-10 text-sm leading-relaxed font-medium">Log in with your group account once to enable session persistence.</p>
+            <button 
+                onClick={handleLogin}
+                className="w-full py-5 bg-white text-gray-900 rounded-[1.5rem] font-black flex items-center justify-center gap-3 hover:bg-gray-100 transition-all shadow-xl active:scale-95"
+            >
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                Sign in with Google
+            </button>
+            <p className="mt-8 text-[10px] text-gray-500 uppercase tracking-widest font-black">Secure Member Access Only</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (user && !isAuthorized) {
+    return (
+        <div className="h-screen flex flex-col items-center justify-center bg-red-50 text-red-900 p-6 font-sans">
+            <div className="bg-white p-12 rounded-[3rem] shadow-2xl text-center max-w-md border border-red-100">
+                <Lock className="h-16 w-16 mx-auto mb-6 text-red-600" />
+                <h2 className="text-2xl font-black mb-4 uppercase tracking-tighter">Access Denied</h2>
+                <p className="text-red-700/70 text-sm mb-8 leading-relaxed font-medium">
+                    Account: <span className="font-bold text-red-900 underline">{user.email}</span><br/>
+                    You aren't on the authorized list.
+                </p>
+                <button onClick={handleLogout} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black shadow-lg hover:bg-red-700 transition-colors">Sign Out</button>
+            </div>
+        </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-20">
+    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-20 selection:bg-emerald-100 selection:text-emerald-900">
       
+      {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl">
+          <div className="bg-white w-full max-w-lg rounded-[2.5rem] p-8 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black">Dashboard Source</h2>
-              <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                <X className="h-6 w-6" />
-              </button>
+              <h2 className="text-2xl font-black uppercase tracking-tighter">Sheet Config</h2>
+              <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><X className="h-6 w-6" /></button>
             </div>
             <div className="space-y-6">
-              <input 
-                type="text" 
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-                placeholder="Google Sheet CSV Export Link"
-                className="w-full px-4 py-4 bg-gray-50 border border-gray-200 rounded-2xl outline-none"
-              />
-              <button 
-                onClick={() => { setShowSettings(false); fetchData(sheetUrl); }}
-                className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl"
-              >
-                Reload Dashboard
-              </button>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-2">CSV Source URL</label>
+                <input 
+                  type="text" value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)}
+                  placeholder="Google Sheet CSV Export Link"
+                  className="w-full px-4 py-4 bg-gray-50 border border-gray-200 rounded-2xl outline-none font-mono text-xs focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                />
+              </div>
+              <button onClick={() => { setShowSettings(false); fetchData(sheetUrl); }} className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl hover:bg-emerald-700 transition-all active:scale-95">Update & Reload</button>
             </div>
           </div>
         </div>
       )}
 
+      {/* Main Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 shadow-sm">
         <div className="max-w-[1600px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-emerald-600 p-2 rounded-xl text-white">
-              <TrendingUp className="h-6 w-6" />
+            <div className="bg-emerald-600 p-2.5 rounded-2xl text-white shadow-lg shadow-emerald-200 rotate-3">
+              <Mountain className="h-6 w-6" />
             </div>
-            <h1 className="text-2xl font-black tracking-tighter uppercase text-gray-900">Challenger Hiking Group</h1>
+            <h1 className="text-2xl font-black tracking-tighter uppercase text-gray-900 leading-none mt-1">Challenger Hiking</h1>
           </div>
           
           <div className="flex items-center gap-3">
-            <button 
-              onClick={() => fetchData(sheetUrl)} 
-              className={`p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors ${isRefreshing ? 'animate-spin' : ''}`}
-              title="Refresh Data"
-            >
-              <RefreshCw className="h-5 w-5" />
-            </button>
-            <button onClick={() => setShowSettings(true)} className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
-              <Settings className="h-5 w-5" />
-            </button>
-            <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-xl border border-gray-200">
+            <div className="flex items-center gap-3 mr-4 pl-4 border-l border-gray-100">
+                <div className="hidden sm:block text-right">
+                  <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Authenticated</div>
+                  <div className="text-[11px] font-bold text-gray-700 leading-none">{user?.displayName || 'Member'}</div>
+                </div>
+                <img src={user?.photoURL} className="w-9 h-9 rounded-full border-2 border-emerald-500 p-0.5" alt="user" />
+                <button onClick={handleLogout} className="p-2 hover:bg-red-50 rounded-xl text-gray-400 hover:text-red-500 transition-all" title="Logout">
+                    <LogOut className="h-5 w-5" />
+                </button>
+            </div>
+            <button onClick={() => fetchData(sheetUrl)} className={`p-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors ${isRefreshing ? 'animate-spin' : ''}`}><RefreshCw className="h-5 w-5" /></button>
+            <button onClick={() => setShowSettings(true)} className="p-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors"><Settings className="h-5 w-5" /></button>
+            <div className="flex items-center gap-2 bg-gray-100 p-1.5 rounded-xl border border-gray-200 ml-2">
               <Filter className="h-4 w-4 ml-2 text-gray-400" />
-              <select 
-                className="bg-transparent border-none rounded-xl text-xs font-black uppercase pr-8 py-0 focus:ring-0"
-                value={selectedYear}
-                onChange={(e) => setSelectedYear(e.target.value)}
-              >
+              <select className="bg-transparent border-none rounded-xl text-xs font-black uppercase pr-8 py-0 focus:ring-0 cursor-pointer" value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)}>
                 {years.map(y => <option key={y} value={y}>{y === 'All' ? 'ALL YEARS' : y}</option>)}
               </select>
             </div>
@@ -333,346 +428,169 @@ const App = () => {
         </div>
       </header>
 
-      <main className="max-w-[1600px] mx-auto px-6 py-8">
+      {/* Dashboard Body */}
+      <main className="max-w-[1600px] mx-auto px-6 py-10">
         
         {/* Search Bar */}
-        <div className="mb-10 relative flex items-center group">
+        <div className="mb-12 relative flex items-center group">
           <input 
-            type="text" 
-            placeholder="Search by peak, hike #, or keywords..." 
-            className="w-full pl-6 pr-24 py-6 text-xl bg-white border border-gray-200 rounded-[2rem] shadow-sm focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all outline-none font-medium"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            type="text" placeholder="Search peaks, details, or dates..." 
+            className="w-full pl-8 pr-24 py-7 text-2xl bg-white border border-gray-200 rounded-[2.5rem] shadow-sm focus:ring-8 focus:ring-emerald-500/5 focus:border-emerald-500 transition-all outline-none font-medium placeholder:text-gray-300"
+            value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <div className="absolute inset-y-0 right-8 flex items-center gap-4">
-            {searchTerm && (
-              <button 
-                onClick={() => setSearchTerm('')}
-                className="p-1.5 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"
-              >
-                <X className="h-6 w-6" />
-              </button>
-            )}
-            <Search className={`h-8 w-8 transition-colors ${searchTerm ? 'text-emerald-500' : 'text-gray-400'}`} />
+          <div className="absolute inset-y-0 right-10 flex items-center gap-4">
+            {searchTerm && <button onClick={() => setSearchTerm('')} className="p-2 hover:bg-gray-100 rounded-full text-gray-400"><X className="h-6 w-6" /></button>}
+            <Search className={`h-10 w-10 transition-colors ${searchTerm ? 'text-emerald-500' : 'text-gray-200'}`} />
           </div>
         </div>
 
-        {/* SUMMARY CARDS SECTION */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
-          {/* Total Hikes */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+        {/* Stats Grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-6 mb-16">
+          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Summits</span>
-              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.hikeCount}</div>
-              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                Since {aggregateStats.since}
-              </span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Total Summits</span>
+              <div className="text-5xl font-black text-gray-900 mb-1 tracking-tighter">{aggregateStats.hikeCount}</div>
+              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg uppercase tracking-widest">Since {aggregateStats.since}</span>
             </div>
-            <Trophy className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+            <Trophy className="h-12 w-12 text-emerald-600 opacity-10 group-hover:opacity-30 transition-opacity" />
           </div>
-
-          {/* Total Miles */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Total Miles</span>
-              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.totalMiles}</div>
-              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                On Foot
-              </span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Miles Logged</span>
+              <div className="text-5xl font-black text-gray-900 mb-1 tracking-tighter">{aggregateStats.totalMiles}</div>
+              <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg uppercase tracking-widest">Across All Years</span>
             </div>
-            <Route className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+            <Route className="h-12 w-12 text-blue-600 opacity-10 group-hover:opacity-30 transition-opacity" />
           </div>
-
-          {/* Total Elevation */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Elevation</span>
-              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.totalElevation}</div>
-              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                Vertical Ft
-              </span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Vertical Gain</span>
+              <div className="text-5xl font-black text-gray-900 mb-1 tracking-tighter">{aggregateStats.totalElevation}</div>
+              <span className="text-[10px] font-black text-red-600 bg-red-50 px-2.5 py-1 rounded-lg uppercase tracking-widest">FT Climbed</span>
             </div>
-            <Mountain className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+            <Activity className="h-12 w-12 text-red-600 opacity-10 group-hover:opacity-30 transition-opacity" />
           </div>
-
-          {/* Average */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Avg / Year</span>
-              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.averageHikesPerYear}</div>
-              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                Hikes
-              </span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Avg Summits</span>
+              <div className="text-5xl font-black text-gray-900 mb-1 tracking-tighter">{aggregateStats.averageHikesPerYear}</div>
+              <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-2.5 py-1 rounded-lg uppercase tracking-widest">Per Calendar Year</span>
             </div>
-            <Activity className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+            <Star className="h-12 w-12 text-orange-600 opacity-10 group-hover:opacity-30 transition-opacity" />
           </div>
-
-          {/* Most Active */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+          <div className="bg-white rounded-[2.5rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl transition-all">
             <div>
               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Most Active</span>
-              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.activeYear}</div>
-              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                {aggregateStats.activeCount} Hikes
-              </span>
+              <div className="text-5xl font-black text-gray-900 mb-1 tracking-tighter">{aggregateStats.activeYear}</div>
+              <span className="text-[10px] font-black text-purple-600 bg-purple-50 px-2.5 py-1 rounded-lg uppercase tracking-widest">{aggregateStats.activeCount} Summits</span>
             </div>
-            <Clock className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+            <Clock className="h-12 w-12 text-purple-600 opacity-10 group-hover:opacity-30 transition-opacity" />
           </div>
         </div>
 
-        {/* Milestones */}
-        {!searchTerm && milestones.length > 0 && (
-          <div className="mb-16">
-            <h2 className="text-2xl font-black mb-8 px-2 flex items-center gap-3">
-              <Flag className="text-emerald-600" /> Major Milestones
-            </h2>
-            <div className="flex overflow-x-auto gap-6 pb-4 no-scrollbar">
-              {milestones.map((m) => (
-                <div key={m.id} className="min-w-[320px] bg-white rounded-3xl p-6 border border-gray-100 shadow-sm hover:shadow-xl transition-all group">
-                  <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase mb-4 inline-block group-hover:bg-emerald-600 group-hover:text-white transition-colors font-mono">
-                    Hike #{m.id}
-                  </span>
-                  <h3 className="text-xl font-black mb-2 line-clamp-1">{m.location}</h3>
-                  <p className="text-sm text-gray-500 line-clamp-2 italic">"{m.comments}"</p>
-                  <div className="mt-4 pt-4 border-t border-gray-50 text-xs font-bold text-gray-400 flex justify-between items-center">
-                    <span>{m.date}</span>
-                    <div className="flex gap-2">
-                       {m.miles > 0 && <span className="text-emerald-600 font-black">{m.miles}mi</span>}
-                       {m.elevation > 0 && <span className="text-red-600 font-black">{m.elevation.toLocaleString()}ft</span>}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* HIGHLIGHT SECTIONS */}
-        {!searchTerm && (
-          <div className="space-y-16 mb-16">
-            {/* ROW 1: Demanding & Beautiful */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 px-2">
-                  <div className="p-2 bg-red-100 text-red-600 rounded-lg"><Zap className="h-5 w-5" /></div>
-                  <h2 className="text-2xl font-black tracking-tight uppercase">Most Demanding</h2>
-                </div>
-                <div className="space-y-4">
-                  {(showAllDemanding ? demandingHikes : demandingHikes.slice(0, 3)).map(h => (
-                    <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-red-200 transition-all flex justify-between items-start group">
-                      <div className="flex-grow">
-                        <span className="text-[9px] font-black text-red-500 uppercase tracking-widest block mb-1">Peak Intensity</span>
-                        <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
-                        <div className="mt-2 flex gap-2">
-                          {h.miles > 0 && <span className="text-[9px] font-black bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.miles} mi</span>}
-                          {h.elevation > 0 && <span className="text-[9px] font-black bg-red-50 text-red-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.elevation.toLocaleString()} ft gain</span>}
-                        </div>
-                      </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-red-400 transition-colors ml-4 whitespace-nowrap">#{h.id}</span>
-                    </div>
-                  ))}
-                  {demandingHikes.length > 3 && (
-                    <button onClick={() => setShowAllDemanding(!showAllDemanding)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-red-600 transition-colors group">
-                      {showAllDemanding ? 'Show Less' : `More Hikes (${demandingHikes.length - 3})`}
-                      {showAllDemanding ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 px-2">
-                  <div className="p-2 bg-blue-100 text-blue-600 rounded-lg"><Sparkles className="h-5 w-5" /></div>
-                  <h2 className="text-2xl font-black tracking-tight uppercase">Most Stunning</h2>
-                </div>
-                <div className="space-y-4">
-                  {(showAllBeautiful ? beautifulHikes : beautifulHikes.slice(0, 3)).map(h => (
-                    <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-blue-200 transition-all flex justify-between items-start group">
-                      <div>
-                        <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest block mb-1">Scenic Legend</span>
-                        <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
-                      </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-blue-400 transition-colors">#{h.id}</span>
-                    </div>
-                  ))}
-                  {beautifulHikes.length > 3 && (
-                    <button onClick={() => setShowAllBeautiful(!showAllBeautiful)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-blue-600 transition-colors group">
-                      {showAllBeautiful ? 'Show Less' : `More Hikes (${beautifulHikes.length - 3})`}
-                      {showAllBeautiful ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* ROW 2: Windy/Rainy & Breakfast */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 px-2">
-                  <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><Wind className="h-5 w-5" /></div>
-                  <h2 className="text-2xl font-black tracking-tight uppercase">Windy & Rainy Hikes</h2>
-                </div>
-                <div className="space-y-4">
-                  {(showAllWindy ? windyRainyHikes : windyRainyHikes.slice(0, 3)).map(h => (
-                    <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-indigo-200 transition-all flex justify-between items-start group">
-                      <div>
-                        <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest block mb-1">Weather Vets</span>
-                        <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
-                      </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-400 transition-colors">#{h.id}</span>
-                    </div>
-                  ))}
-                  {windyRainyHikes.length > 3 && (
-                    <button onClick={() => setShowAllWindy(!showAllWindy)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-indigo-600 transition-colors group">
-                      {showAllWindy ? 'Show Less' : `More Hikes (${windyRainyHikes.length - 3})`}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div className="flex items-center gap-3 px-2">
-                  <div className="p-2 bg-amber-100 text-amber-600 rounded-lg"><Coffee className="h-5 w-5" /></div>
-                  <h2 className="text-2xl font-black tracking-tight uppercase">Post-Hike Breakfast</h2>
-                </div>
-                <div className="space-y-4">
-                  {(showAllBreakfast ? breakfastHikes : breakfastHikes.slice(0, 3)).map(h => (
-                    <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-amber-200 transition-all flex justify-between items-start group">
-                      <div>
-                        <span className="text-[9px] font-black text-amber-500 uppercase tracking-widest block mb-1">Group Fuel</span>
-                        <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
-                        <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
-                      </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-amber-400 transition-colors">#{h.id}</span>
-                    </div>
-                  ))}
-                  {breakfastHikes.length > 3 && (
-                    <button onClick={() => setShowAllBreakfast(!showAllBreakfast)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-amber-600 transition-colors group">
-                      {showAllBreakfast ? 'Show Less' : `More Hikes (${breakfastHikes.length - 3})`}
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-          {/* Main Feed */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white rounded-3xl border border-gray-100 overflow-hidden shadow-sm">
-              <div className="p-8 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
-                <h3 className="font-black text-lg flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-emerald-600" />
-                  {searchTerm ? 'Search Results' : 'Adventure History'}
+        {/* Layout Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 xl:grid-cols-5 gap-10 items-start">
+            
+            {/* Sidebar Left: Milestones */}
+            <div className="lg:col-span-1 hidden lg:block">
+              <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm sticky top-28">
+                <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-gray-400 mb-10 flex items-center gap-3">
+                  <Flag className="h-5 w-5 text-emerald-600" /> Milestone Tracking
                 </h3>
-                <span className="text-xs font-bold text-gray-400 bg-white px-3 py-1 rounded-full border border-gray-100 font-mono">
-                  {filteredData.length} entries
-                </span>
-              </div>
-              <div className="divide-y divide-gray-50 max-h-[800px] overflow-y-auto">
-                {filteredData.length > 0 ? (
-                  filteredData.map((hike) => (
-                    <div key={hike.id} className="p-8 hover:bg-emerald-50/10 transition-colors group">
-                      <div className="flex justify-between items-start gap-4">
-                        <div className="flex-grow">
-                          <div className="flex items-center gap-3 mb-2">
-                            <span className="text-[10px] font-black bg-gray-900 text-white px-3 py-1 rounded-full group-hover:bg-emerald-600 transition-colors font-mono">#{hike.id}</span>
-                            <span className="text-xs font-bold text-gray-400">{hike.date}</span>
-                            <div className="flex gap-3">
-                              {hike.miles > 0 && <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{hike.miles} miles</span>}
-                              {hike.elevation > 0 && <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">{hike.elevation.toLocaleString()} ft gain</span>}
-                            </div>
-                          </div>
-                          <h4 className="text-2xl font-black mb-3 group-hover:text-emerald-700 transition-colors">{hike.location}</h4>
-                          <p className="text-gray-600 text-sm md:text-base leading-relaxed">{hike.comments}</p>
-                        </div>
-                        {hike.direction && (
-                          <a 
-                            href={hike.direction} 
-                            target="_blank" 
-                            rel="noreferrer" 
-                            className="p-3 bg-gray-50 text-gray-400 rounded-2xl hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
-                          >
-                            <ArrowUpRight className="h-5 w-5" />
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="p-20 text-center text-gray-400 flex flex-col items-center gap-4">
-                    <Info className="h-10 w-10 opacity-20" />
-                    <p className="font-medium italic">No matches found for "{searchTerm}"</p>
-                    <button onClick={() => setSearchTerm('')} className="text-emerald-600 font-bold text-sm hover:underline font-black">Clear search</button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-8">
-            <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
-              <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-8 flex items-center gap-2">
-                <TrendingUp className="h-4 w-4" /> Frequency by Year
-              </h3>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={yearStats} margin={{ top: 20 }}>
-                    <Bar dataKey="count" radius={[6, 6, 0, 0]}>
-                      {yearStats.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.year === selectedYear ? '#064e3b' : '#059669'} />
-                      ))}
-                      <LabelList 
-                        dataKey="count" 
-                        position="top" 
-                        style={{ fill: '#6b7280', fontSize: 10, fontWeight: 800 }}
-                      />
-                    </Bar>
-                    <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 800, fill: '#6b7280'}} />
-                    <Tooltip cursor={{fill: '#f0fdf4'}} contentStyle={{borderRadius: '16px', border: 'none'}} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {topLocations.length > 0 && (
-              <div className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm">
-                <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-8">Popular Peaks</h3>
-                <div className="space-y-6">
-                  {topLocations.map((loc, idx) => (
-                    <div key={idx} className="flex items-center justify-between group">
-                      <div className="flex items-center gap-4">
-                        <div className="h-10 w-10 rounded-xl bg-gray-50 text-gray-400 flex items-center justify-center text-sm font-black group-hover:bg-emerald-50 group-hover:text-emerald-600 transition-colors font-mono">{idx + 1}</div>
-                        <span className="text-sm font-bold text-gray-700">{loc.name}</span>
-                      </div>
-                      <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-lg text-[10px] font-black font-mono">{loc.count}</span>
+                <div className="relative border-l-2 border-dashed border-gray-100 ml-4 space-y-12 pb-4">
+                  {milestones.map((hike) => (
+                    <div key={hike.id} className="relative pl-10 group">
+                      <div className="absolute -left-[13px] top-1.5 w-6 h-6 bg-white border-4 border-emerald-500 rounded-full shadow-lg group-hover:scale-125 transition-transform z-10"></div>
+                      <div className="bg-emerald-50 inline-block px-3 py-1 rounded-xl text-[10px] font-black text-emerald-700 mb-2 font-mono">#{hike.id} SUMMIT</div>
+                      <div className="text-sm font-black uppercase tracking-tighter leading-tight mb-1">{hike.location}</div>
+                      <div className="text-[10px] text-gray-400 font-bold font-mono uppercase">{hike.date}</div>
                     </div>
                   ))}
                 </div>
               </div>
-            )}
-
-            <div className="bg-gray-900 rounded-[2rem] p-10 text-white relative overflow-hidden group shadow-2xl">
-              <div className="relative z-10">
-                <Star className="text-yellow-400 mb-6 group-hover:rotate-45 transition-transform duration-500 h-8 w-8" />
-                <h3 className="text-3xl font-black mb-2">Road to 400</h3>
-                <p className="text-gray-400 text-sm mb-8 italic">Next big milestone ahead!</p>
-                <div className="w-full h-2.5 bg-white/10 rounded-full mb-3">
-                  <div className="h-full bg-emerald-500 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.5)] transition-all duration-1000" style={{ width: `${Math.min((data[0]?.id / 400) * 100, 100)}%` }}></div>
-                </div>
-                <div className="flex justify-between text-[10px] font-black text-emerald-400 tracking-widest font-mono">
-                  <span>CURRENT: {data[0]?.id || 0}</span>
-                  <span>GOAL: 400</span>
-                </div>
-              </div>
-              <div className="absolute top-0 right-0 -mr-16 -mt-16 w-48 h-48 bg-emerald-500 opacity-10 rounded-full blur-3xl"></div>
             </div>
-          </div>
+
+            {/* Main Content: Expedition Log */}
+            <div className="lg:col-span-2 xl:col-span-3 space-y-10">
+                <div className="bg-white rounded-[2.5rem] border border-gray-100 overflow-hidden shadow-sm">
+                    <div className="px-10 py-8 border-b border-gray-50 flex justify-between items-center bg-gray-50/30">
+                        <div className="flex items-center gap-4">
+                          <Activity className="h-6 w-6 text-emerald-600" /> 
+                          <h3 className="font-black text-xl uppercase tracking-tighter">
+                            {searchTerm ? 'Search Results' : 'Complete Expedition Log'}
+                          </h3>
+                        </div>
+                        <span className="text-[11px] font-black text-gray-400 bg-white px-4 py-1.5 rounded-full border border-gray-200 shadow-sm uppercase tracking-widest">{filteredData.length} entries</span>
+                    </div>
+                    <div className="divide-y divide-gray-50 max-h-[1400px] overflow-y-auto custom-scrollbar">
+                        {filteredData.length > 0 ? (
+                        filteredData.map((hike) => (
+                            <div key={hike.id} className="p-10 hover:bg-emerald-50/10 transition-colors group">
+                                <div className="flex justify-between items-start gap-6">
+                                    <div className="flex-grow">
+                                        <div className="flex flex-wrap items-center gap-3 mb-4">
+                                            <span className="text-[11px] font-black bg-gray-900 text-white px-4 py-1.5 rounded-full group-hover:bg-emerald-600 transition-all font-mono shadow-md">#{hike.id}</span>
+                                            <span className="text-xs font-black text-gray-300 font-mono tracking-widest uppercase">{hike.date}</span>
+                                            <div className="flex gap-4 font-mono">
+                                                {hike.miles > 0 && <span className="text-[11px] text-emerald-600 font-black uppercase tracking-widest bg-emerald-50 px-2 py-0.5 rounded-md">{hike.miles} miles</span>}
+                                                {hike.elevation > 0 && <span className="text-[11px] text-red-600 font-black uppercase tracking-widest bg-red-50 px-2 py-0.5 rounded-md">{hike.elevation.toLocaleString()} ft gain</span>}
+                                            </div>
+                                        </div>
+                                        <h4 className="text-3xl font-black mb-4 group-hover:text-emerald-700 transition-colors uppercase tracking-tighter leading-none">{hike.location}</h4>
+                                        <p className="text-gray-500 text-lg leading-relaxed italic font-medium">"{hike.comments}"</p>
+                                    </div>
+                                    {hike.direction && (
+                                    <a href={hike.direction} target="_blank" rel="noreferrer" className="p-4 bg-gray-50 text-gray-300 rounded-[1.5rem] hover:bg-emerald-600 hover:text-white hover:rotate-12 transition-all shadow-sm">
+                                        <ArrowUpRight className="h-6 w-6" />
+                                    </a>
+                                    )}
+                                </div>
+                            </div>
+                        ))
+                        ) : (
+                        <div className="p-32 text-center text-gray-400 flex flex-col items-center gap-6">
+                            <div className="bg-gray-50 p-6 rounded-[2rem]">
+                              <Search className="h-12 w-12 opacity-20" />
+                            </div>
+                            <p className="font-bold uppercase tracking-widest text-lg">No treks found matching "{searchTerm}"</p>
+                            <button onClick={() => setSearchTerm('')} className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black text-sm hover:bg-emerald-700 transition-all uppercase tracking-widest shadow-xl">Clear Search Filters</button>
+                        </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+
+            {/* Sidebar Right: Visual Stats & Categories */}
+            <div className="lg:col-span-1 space-y-10">
+                {/* Year Chart */}
+                <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden">
+                    <h3 className="text-[10px] font-black uppercase tracking-[0.3em] text-gray-400 mb-10 flex items-center gap-2"><TrendingUp className="h-5 w-5 text-emerald-500" /> Yearly Momentum</h3>
+                    <div className="h-56 font-mono">
+                        <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={yearStats}>
+                            <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                            {yearStats.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={entry.year === selectedYear ? '#064e3b' : '#059669'} />
+                            ))}
+                            <LabelList dataKey="count" position="top" offset={10} style={{ fill: '#9ca3af', fontSize: 10, fontWeight: 900 }} />
+                            </Bar>
+                            <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: 900, fill: '#9ca3af'}} />
+                            <Tooltip 
+                              cursor={{fill: '#f0fdf4'}} 
+                              contentStyle={{borderRadius: '24px', border: 'none', boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.15)', fontWeight: '900', fontSize: '12px'}} 
+                            />
+                        </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+
+                {/* Category List Cards */}
+                <HikeListCard title="Demanding Peaks" icon={Zap} hikes={demandingHikes} colorClass="text-red-500" showAll={showAllDemanding} onToggle={() => setShowAllDemanding(!showAllDemanding)} />
+                <HikeListCard title="Stunning Views" icon={Sparkles} hikes={beautifulHikes} colorClass="text-blue-500" showAll={showAllBeautiful} onToggle={() => setShowAllBeautiful(!showAllBeautiful)} />
+                <HikeListCard title="Rough Weather" icon={Wind} hikes={windyRainyHikes} colorClass="text-cyan-500" showAll={showAllWindy} onToggle={() => setShowAllWindy(!showAllWindy)} />
+                <HikeListCard title="The Breakfast Club" icon={Coffee} hikes={breakfastHikes} colorClass="text-orange-500" showAll={showAllBreakfast} onToggle={() => setShowAllBreakfast(!showAllBreakfast)} />
+            </div>
+
         </div>
       </main>
     </div>
