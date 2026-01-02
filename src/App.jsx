@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, LabelList
 } from 'recharts';
 import { 
   Calendar, MapPin, Search, ChevronRight, Activity, TrendingUp, Info, 
   ExternalLink, ArrowUpRight, Filter, X, Hash, Trophy, Star, Target, Flag, RefreshCw, Link as LinkIcon, Settings,
-  Zap, Sparkles, ChevronDown, ChevronUp, Wind, Coffee, Route, Clock
+  Zap, Sparkles, ChevronDown, ChevronUp, Wind, Coffee, Route, Clock, Mountain
 } from 'lucide-react';
 
 /**
@@ -32,7 +32,16 @@ const App = () => {
   const [showAllWindy, setShowAllWindy] = useState(false);
   const [showAllBreakfast, setShowAllBreakfast] = useState(false);
 
-  // Robust CSV Parser handling quotes and multiline comments
+  // Helper to extract numeric values robustly
+  const cleanNum = (val) => {
+    if (val === undefined || val === null || val === '') return 0;
+    // Remove commas and extract the first sequence of digits and decimals
+    const sanitized = val.toString().replace(/,/g, '').trim();
+    const match = sanitized.match(/^-?\d*\.?\d+/);
+    return match ? parseFloat(match[0]) : 0;
+  };
+
+  // Robust CSV Parser
   const parseCSV = (csvText) => {
     const lines = [];
     let currentLine = [];
@@ -67,12 +76,23 @@ const App = () => {
       lines.push(currentLine);
     }
 
+    if (lines.length < 2) return [];
+
+    // Identify Column Indices from Header Row
+    const header = lines[0].map(h => h.toLowerCase().trim());
+    const milesIdx = header.findIndex(h => h.includes('mile'));
+    const elevIdx = header.findIndex(h => h.includes('elevation') || h.includes('gain'));
+    
+    // Fallback logic if headers aren't explicitly named - use indices based on user description (last 2)
+    const finalMilesIdx = milesIdx !== -1 ? milesIdx : lines[0].length - 2;
+    const finalElevIdx = elevIdx !== -1 ? elevIdx : lines[0].length - 1;
+
     return lines.slice(1) 
       .map(parts => {
         const rawHikeNum = parts[0];
         const id = rawHikeNum && rawHikeNum.trim() !== "" ? parseInt(rawHikeNum) : null;
         
-        // Year Sanitizer Logic
+        // Year Sanitizer
         let year = 'Unknown';
         const dateParts = parts[1]?.split('/');
         if (dateParts && dateParts.length === 3) {
@@ -89,6 +109,8 @@ const App = () => {
           comments: parts[2] || '',
           direction: parts[3] || '',
           location: parts[4] || 'Unknown',
+          miles: cleanNum(parts[finalMilesIdx]),
+          elevation: cleanNum(parts[finalElevIdx])
         };
       })
       .filter(h => h.id !== null && !isNaN(h.id) && h.id > 0)
@@ -127,7 +149,6 @@ const App = () => {
     return data.filter(h => targets.includes(h.id)).sort((a, b) => b.id - a.id);
   }, [data]);
 
-  // Year frequency statistics
   const yearStats = useMemo(() => {
     const stats = {};
     data.forEach(hike => {
@@ -138,10 +159,11 @@ const App = () => {
     return Object.keys(stats).sort().map(year => ({ year, count: stats[year] }));
   }, [data]);
 
-  // Aggregate stats including start year, active year, and average
   const aggregateStats = useMemo(() => {
     let startYear = null;
     const yearSet = new Set();
+    let totalMiles = 0;
+    let totalElevation = 0;
 
     data.forEach(hike => {
       const y = parseInt(hike.year);
@@ -149,55 +171,45 @@ const App = () => {
         if (!startYear || y < startYear) startYear = y;
         yearSet.add(y);
       }
+      totalMiles += (hike.miles || 0);
+      totalElevation += (hike.elevation || 0);
     });
 
     const mostActive = [...yearStats].sort((a, b) => b.count - a.count)[0];
     const totalYears = yearSet.size || 1;
-    const averageHikes = (data.length / totalYears).toFixed(1);
 
     return {
       hikeCount: data.length,
       since: startYear,
       activeYear: mostActive?.year || 'N/A',
       activeCount: mostActive?.count || 0,
-      averageHikesPerYear: averageHikes
+      averageHikesPerYear: (data.length / totalYears).toFixed(1),
+      totalMiles: totalMiles.toLocaleString(undefined, { maximumFractionDigits: 1 }),
+      totalElevation: totalElevation.toLocaleString()
     };
   }, [data, yearStats]);
 
-  // CATEGORY LOGIC: Demanding vs Beautiful
+  // CATEGORY LOGIC: Demanding scoring system based on physical exertion
   const demandingHikes = useMemo(() => {
     const priorityNames = [
-      'white mountain', 'everest', 'base camp', 'nepal', 'mount dana', 'shiva murugan', 
-      'ohlone wilderness', 'del valle', 'sunol peak', 'taylor ranch'
+      'white mountain', 'everest', 'nepal', 'mount dana', 'shiva murugan', 
+      'ohlone wilderness', 'del valle', 'sunol peak', 'taylor ranch', 'mission peak'
     ];
     
-    const demandKeywords = [
-      'strenuous', 'tough', 'difficult', 'elevation', 'gain', 'climb', 'uphill', 'steep'
-    ];
-
     return data.map(h => {
       const loc = h.location.toLowerCase();
       const comm = h.comments.toLowerCase();
       
-      // Extraction logic for miles and feet
-      const milesMatch = comm.match(/(\d+(\.\d+)?)\s*(miles?|mi)\b/);
-      const feetMatch = comm.match(/(\d{1,2},?\d{3})\s*(ft|feet|elevation|gain)\b/);
+      // Calculate direct physical score: 1 Mile is worth 500ft of gain for ranking purposes
+      let score = (h.miles * 500) + (h.elevation);
       
-      const miles = milesMatch ? parseFloat(milesMatch[1]) : 0;
-      const feetRaw = feetMatch ? feetMatch[1].replace(',', '') : "0";
-      const feet = parseInt(feetRaw);
+      // Secondary check: keyword scoring for entries without column data or local legends
+      if (priorityNames.some(name => loc.includes(name) || comm.includes(name))) score += 8000;
+      if (comm.includes('strenuous') || comm.includes('tough') || comm.includes('challenging')) score += 1000;
 
-      // Scoring system for sorting
-      let score = 0;
-      if (priorityNames.some(name => loc.includes(name) || comm.includes(name))) score += 1000;
-      if (demandKeywords.some(kw => loc.includes(kw) || comm.includes(kw))) score += 100;
-      score += (miles * 10); // Every mile adds significantly to weight
-      score += (feet / 100); // Higher elevation adds weight
-
-      return { ...h, miles, feet, score };
+      return { ...h, score };
     })
-    .filter(h => h.score > 0) // Only keep hikes that meet some criteria
-    .sort((a, b) => b.score - a.score) // Sort by our calculated "demand" score
+    .sort((a, b) => b.score - a.score)
     .slice(0, 10);
   }, [data]);
 
@@ -251,7 +263,7 @@ const App = () => {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-gray-50 p-6">
         <RefreshCw className="mb-4 h-12 w-12 animate-spin text-emerald-600" />
-        <h2 className="text-xl font-bold text-gray-700">Loading your adventure...</h2>
+        <h2 className="text-xl font-bold text-gray-700">Connecting to Google Sheet...</h2>
       </div>
     );
   }
@@ -263,29 +275,24 @@ const App = () => {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white w-full max-w-lg rounded-3xl p-8 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-black">Dashboard Settings</h2>
+              <h2 className="text-2xl font-black">Dashboard Source</h2>
               <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                 <X className="h-6 w-6" />
               </button>
             </div>
             <div className="space-y-6">
-              <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                <p className="text-emerald-800 text-sm font-medium">
-                  Paste your Google Sheets CSV URL here to sync live data.
-                </p>
-              </div>
               <input 
                 type="text" 
                 value={sheetUrl}
                 onChange={(e) => setSheetUrl(e.target.value)}
-                placeholder="https://docs.google.com/spreadsheets/d/.../pub?output=csv"
+                placeholder="Google Sheet CSV Export Link"
                 className="w-full px-4 py-4 bg-gray-50 border border-gray-200 rounded-2xl outline-none"
               />
               <button 
                 onClick={() => { setShowSettings(false); fetchData(sheetUrl); }}
                 className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl"
               >
-                Save Connection
+                Reload Dashboard
               </button>
             </div>
           </div>
@@ -293,7 +300,7 @@ const App = () => {
       )}
 
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40 px-6 py-4 shadow-sm">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="max-w-[1600px] mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="bg-emerald-600 p-2 rounded-xl text-white">
               <TrendingUp className="h-6 w-6" />
@@ -326,70 +333,94 @@ const App = () => {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="max-w-[1600px] mx-auto px-6 py-8">
         
         {/* Search Bar */}
-        <div className="mb-8 relative flex items-center group">
+        <div className="mb-10 relative flex items-center group">
           <input 
             type="text" 
-            placeholder="Search peaks, dates, or keywords..." 
-            className="w-full pl-6 pr-24 py-5 text-lg bg-white border border-gray-200 rounded-3xl shadow-sm focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all outline-none"
+            placeholder="Search by peak, hike #, or keywords..." 
+            className="w-full pl-6 pr-24 py-6 text-xl bg-white border border-gray-200 rounded-[2rem] shadow-sm focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 transition-all outline-none font-medium"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
-          <div className="absolute inset-y-0 right-6 flex items-center gap-3">
+          <div className="absolute inset-y-0 right-8 flex items-center gap-4">
             {searchTerm && (
               <button 
                 onClick={() => setSearchTerm('')}
-                className="p-1 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"
+                className="p-1.5 hover:bg-gray-100 rounded-full text-gray-400 transition-colors"
               >
-                <X className="h-5 w-5" />
+                <X className="h-6 w-6" />
               </button>
             )}
-            <Search className={`h-6 w-6 transition-colors ${searchTerm ? 'text-emerald-500' : 'text-gray-400'}`} />
+            <Search className={`h-8 w-8 transition-colors ${searchTerm ? 'text-emerald-500' : 'text-gray-400'}`} />
           </div>
         </div>
 
         {/* SUMMARY CARDS SECTION */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
           {/* Total Hikes */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all duration-500">
+          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Legacy Count</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Summits</span>
               <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.hikeCount}</div>
               <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                Since {aggregateStats.since || '2016'}
+                Since {aggregateStats.since}
               </span>
             </div>
             <Trophy className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
           </div>
 
-          {/* Average Hikes Per Year */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all duration-500">
+          {/* Total Miles */}
+          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Yearly Average</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Total Miles</span>
+              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.totalMiles}</div>
+              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
+                On Foot
+              </span>
+            </div>
+            <Route className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+          </div>
+
+          {/* Total Elevation */}
+          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Elevation</span>
+              <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.totalElevation}</div>
+              <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
+                Vertical Ft
+              </span>
+            </div>
+            <Mountain className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
+          </div>
+
+          {/* Average */}
+          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
+            <div>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Avg / Year</span>
               <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.averageHikesPerYear}</div>
               <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                Hikes / Season
+                Hikes
               </span>
             </div>
             <Activity className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
           </div>
 
-          {/* Most Active Year */}
-          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all duration-500">
+          {/* Most Active */}
+          <div className="bg-white rounded-[2rem] p-8 border border-gray-100 shadow-sm flex items-center justify-between group hover:shadow-xl hover:border-emerald-200 transition-all">
             <div>
-              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Most Active Year</span>
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Most Active</span>
               <div className="text-4xl font-black text-gray-900 mb-1">{aggregateStats.activeYear}</div>
               <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md uppercase tracking-widest">
-                {aggregateStats.activeCount} Summits
+                {aggregateStats.activeCount} Hikes
               </span>
             </div>
             <Clock className="h-10 w-10 text-emerald-600 opacity-20 group-hover:opacity-100 transition-opacity" />
           </div>
         </div>
 
-        {/* Milestones (Hide when searching) */}
+        {/* Milestones */}
         {!searchTerm && milestones.length > 0 && (
           <div className="mb-16">
             <h2 className="text-2xl font-black mb-8 px-2 flex items-center gap-3">
@@ -397,7 +428,7 @@ const App = () => {
             </h2>
             <div className="flex overflow-x-auto gap-6 pb-4 no-scrollbar">
               {milestones.map((m) => (
-                <div key={m.id} className="min-w-[280px] bg-white rounded-3xl p-6 border border-gray-100 shadow-sm hover:shadow-xl transition-all group">
+                <div key={m.id} className="min-w-[320px] bg-white rounded-3xl p-6 border border-gray-100 shadow-sm hover:shadow-xl transition-all group">
                   <span className="bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase mb-4 inline-block group-hover:bg-emerald-600 group-hover:text-white transition-colors">
                     Hike #{m.id}
                   </span>
@@ -405,7 +436,9 @@ const App = () => {
                   <p className="text-sm text-gray-500 line-clamp-2 italic">"{m.comments}"</p>
                   <div className="mt-4 pt-4 border-t border-gray-50 text-xs font-bold text-gray-400 flex justify-between items-center">
                     <span>{m.date}</span>
-                    <Target className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="flex gap-2">
+                       {m.miles > 0 && <span className="text-emerald-600 font-black">{m.miles}mi</span>}
+                    </div>
                   </div>
                 </div>
               ))}
@@ -413,7 +446,7 @@ const App = () => {
           </div>
         )}
 
-        {/* HIGHLIGHT SECTIONS (Hide when searching) */}
+        {/* HIGHLIGHT SECTIONS */}
         {!searchTerm && (
           <div className="space-y-16 mb-16">
             {/* ROW 1: Demanding & Beautiful */}
@@ -427,21 +460,21 @@ const App = () => {
                   {(showAllDemanding ? demandingHikes : demandingHikes.slice(0, 3)).map(h => (
                     <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-red-200 transition-all flex justify-between items-start group">
                       <div className="flex-grow">
-                        <span className="text-[9px] font-black text-red-500 uppercase tracking-widest block mb-1">High Intensity</span>
+                        <span className="text-[9px] font-black text-red-500 uppercase tracking-widest block mb-1">Peak Intensity</span>
                         <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
                         <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
                         <div className="mt-2 flex gap-2">
                           {h.miles > 0 && <span className="text-[9px] font-black bg-gray-100 text-gray-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.miles} mi</span>}
-                          {h.feet > 0 && <span className="text-[9px] font-black bg-red-50 text-red-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.feet} ft gain</span>}
+                          {h.elevation > 0 && <span className="text-[9px] font-black bg-red-50 text-red-600 px-2 py-0.5 rounded-md uppercase tracking-widest">{h.elevation.toLocaleString()} ft gain</span>}
                         </div>
                       </div>
-                      <span className="text-[10px] font-black text-gray-300 group-hover:text-red-400 transition-colors ml-4 whitespace-nowrap">#{h.id}</span>
+                      <span className="text-[10px] font-black text-gray-300 group-hover:text-red-400 transition-colors ml-4">#{h.id}</span>
                     </div>
                   ))}
                   {demandingHikes.length > 3 && (
                     <button onClick={() => setShowAllDemanding(!showAllDemanding)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-red-600 transition-colors group">
-                      {showAllDemanding ? 'Show Less' : `More Hikes (${demandingHikes.length - 3} available)`}
-                      {showAllDemanding ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
+                      {showAllDemanding ? 'Show Less' : `More Hikes (${demandingHikes.length - 3})`}
+                      {showAllDemanding ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                     </button>
                   )}
                 </div>
@@ -456,7 +489,7 @@ const App = () => {
                   {(showAllBeautiful ? beautifulHikes : beautifulHikes.slice(0, 3)).map(h => (
                     <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-blue-200 transition-all flex justify-between items-start group">
                       <div>
-                        <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest block mb-1">Highly Scenic</span>
+                        <span className="text-[9px] font-black text-blue-500 uppercase tracking-widest block mb-1">Scenic Legend</span>
                         <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
                         <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
                       </div>
@@ -465,8 +498,8 @@ const App = () => {
                   ))}
                   {beautifulHikes.length > 3 && (
                     <button onClick={() => setShowAllBeautiful(!showAllBeautiful)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-blue-600 transition-colors group">
-                      {showAllBeautiful ? 'Show Less' : `More Hikes (${beautifulHikes.length - 3} available)`}
-                      {showAllBeautiful ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
+                      {showAllBeautiful ? 'Show Less' : `More Hikes (${beautifulHikes.length - 3})`}
+                      {showAllBeautiful ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                     </button>
                   )}
                 </div>
@@ -484,7 +517,7 @@ const App = () => {
                   {(showAllWindy ? windyRainyHikes : windyRainyHikes.slice(0, 3)).map(h => (
                     <div key={h.id} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:border-indigo-200 transition-all flex justify-between items-start group">
                       <div>
-                        <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest block mb-1">Wild Weather</span>
+                        <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest block mb-1">Weather Vets</span>
                         <h4 className="font-bold text-gray-900 line-clamp-1">{h.location}</h4>
                         <p className="text-xs text-gray-500 mt-1 line-clamp-2">{h.comments}</p>
                       </div>
@@ -493,8 +526,7 @@ const App = () => {
                   ))}
                   {windyRainyHikes.length > 3 && (
                     <button onClick={() => setShowAllWindy(!showAllWindy)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-indigo-600 transition-colors group">
-                      {showAllWindy ? 'Show Less' : `More Hikes (${windyRainyHikes.length - 3} available)`}
-                      {showAllWindy ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
+                      {showAllWindy ? 'Show Less' : `More Hikes (${windyRainyHikes.length - 3})`}
                     </button>
                   )}
                 </div>
@@ -518,8 +550,7 @@ const App = () => {
                   ))}
                   {breakfastHikes.length > 3 && (
                     <button onClick={() => setShowAllBreakfast(!showAllBreakfast)} className="w-full py-3 flex items-center justify-center gap-2 text-xs font-black uppercase tracking-widest text-gray-400 hover:text-amber-600 transition-colors group">
-                      {showAllBreakfast ? 'Show Less' : `More Hikes (${breakfastHikes.length - 3} available)`}
-                      {showAllBreakfast ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4 group-hover:translate-y-0.5 transition-transform" />}
+                      {showAllBreakfast ? 'Show Less' : `More Hikes (${breakfastHikes.length - 3})`}
                     </button>
                   )}
                 </div>
@@ -550,6 +581,7 @@ const App = () => {
                           <div className="flex items-center gap-3 mb-2">
                             <span className="text-[10px] font-black bg-gray-900 text-white px-3 py-1 rounded-full group-hover:bg-emerald-600 transition-colors">#{hike.id}</span>
                             <span className="text-xs font-bold text-gray-400">{hike.date}</span>
+                            {hike.miles > 0 && <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">{hike.miles} miles</span>}
                           </div>
                           <h4 className="text-2xl font-black mb-3 group-hover:text-emerald-700 transition-colors">{hike.location}</h4>
                           <p className="text-gray-600 text-sm md:text-base leading-relaxed">{hike.comments}</p>
@@ -560,7 +592,6 @@ const App = () => {
                             target="_blank" 
                             rel="noreferrer" 
                             className="p-3 bg-gray-50 text-gray-400 rounded-2xl hover:bg-emerald-600 hover:text-white transition-all shadow-sm"
-                            title="Open Map"
                           >
                             <ArrowUpRight className="h-5 w-5" />
                           </a>
@@ -587,21 +618,19 @@ const App = () => {
               </h3>
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={yearStats}>
+                  <BarChart data={yearStats} margin={{ top: 20 }}>
                     <Bar dataKey="count" radius={[6, 6, 0, 0]}>
                       {yearStats.map((entry, index) => (
-                        <Cell 
-                          key={`cell-${index}`} 
-                          fill={entry.year === selectedYear ? '#064e3b' : '#059669'} 
-                          className="transition-all duration-300"
-                        />
+                        <Cell key={`cell-${index}`} fill={entry.year === selectedYear ? '#064e3b' : '#059669'} />
                       ))}
+                      <LabelList 
+                        dataKey="count" 
+                        position="top" 
+                        style={{ fill: '#6b7280', fontSize: 10, fontWeight: 800 }}
+                      />
                     </Bar>
                     <XAxis dataKey="year" axisLine={false} tickLine={false} tick={{fontSize: 10, fontWeight: 800, fill: '#6b7280'}} />
-                    <Tooltip 
-                      cursor={{fill: '#f0fdf4'}} 
-                      contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)'}} 
-                    />
+                    <Tooltip cursor={{fill: '#f0fdf4'}} contentStyle={{borderRadius: '16px', border: 'none'}} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -624,7 +653,7 @@ const App = () => {
               </div>
             )}
 
-            <div className="bg-gray-900 rounded-3xl p-10 text-white relative overflow-hidden group shadow-2xl">
+            <div className="bg-gray-900 rounded-[2rem] p-10 text-white relative overflow-hidden group shadow-2xl">
               <div className="relative z-10">
                 <Star className="text-yellow-400 mb-6 group-hover:rotate-45 transition-transform duration-500 h-8 w-8" />
                 <h3 className="text-3xl font-black mb-2">Road to 400</h3>
